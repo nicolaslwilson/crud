@@ -1,3 +1,4 @@
+import 'jest-extended';
 import { RequestQueryException } from '../src/exceptions/request-query.exception';
 import { ParamsOptions, ParsedRequestParams } from '../src/interfaces';
 import { RequestQueryParser } from '../src/request-query.parser';
@@ -138,6 +139,14 @@ describe('#request-query', () => {
           const query = { filter: [`foo||eq||12345`] };
           const expected: QueryFilter[] = [
             { field: 'foo', operator: 'eq', value: 12345 },
+          ];
+          const test = qp.parseQuery(query);
+          expect(test.filter[0]).toMatchObject(expected[0]);
+        });
+        it('should set string, 11', () => {
+          const query = { filter: ['foo||eq||4202140192612927005304000000236630'] };
+          const expected: QueryFilter[] = [
+            { field: 'foo', operator: 'eq', value: '4202140192612927005304000000236630' },
           ];
           const test = qp.parseQuery(query);
           expect(test.filter[0]).toMatchObject(expected[0]);
@@ -358,6 +367,28 @@ describe('#request-query', () => {
       });
     });
 
+    describe('#parse search', () => {
+      it('should set undefined', () => {
+        const query = { foo: '' };
+        const test = qp.parseQuery(query);
+        expect(test.search).toBeUndefined();
+      });
+      it('should throw an error, 1', () => {
+        const query = { s: 'invalid' };
+        expect(qp.parseQuery.bind(qp, query)).toThrowError(RequestQueryException);
+      });
+      it('should throw an error, 2', () => {
+        const query = { s: 'true' };
+        expect(qp.parseQuery.bind(qp, query)).toThrowError(RequestQueryException);
+      });
+      it('should parse search', () => {
+        const query = { s: '{"$or":[{"id":1},{"name":"foo"}]}' };
+        const expected = { $or: [{ id: 1 }, { name: 'foo' }] };
+        const test = qp.parseQuery(query);
+        expect(test.search).toMatchObject(expected);
+      });
+    });
+
     describe('#parseParams', () => {
       it('should return instance of RequestQueryParse', () => {
         expect((qp as any).parseParams()).toBeInstanceOf(RequestQueryParser);
@@ -410,19 +441,61 @@ describe('#request-query', () => {
           foo: 'cb1751fd-7fcf-4eb5-b38e-86428b1fd88d',
           bar: '1',
           buz: 'string',
+          bigInt: '9007199254740999', // Bigger than Number.MAX_SAFE_INTEGER
         };
         const options: ParamsOptions = {
           foo: { field: 'foo', type: 'uuid' },
           bar: { field: 'bb', type: 'number' },
           buz: { field: 'buz', type: 'string' },
+          bigInt: { field: 'bigInt', type: 'string' },
         };
         const test = qp.parseParams(params, options);
         const expected = [
           { field: 'foo', operator: 'eq', value: 'cb1751fd-7fcf-4eb5-b38e-86428b1fd88d' },
           { field: 'bb', operator: 'eq', value: 1 },
           { field: 'buz', operator: 'eq', value: 'string' },
+          { field: 'bigInt', operator: 'eq', value: '9007199254740999' },
         ];
         expect(test.paramsFilter).toMatchObject(expected);
+      });
+      it('should set paramsFilter with disabled validation', () => {
+        const params = {
+          foo: 'cb1751fd',
+          bar: '123',
+        };
+        const options: ParamsOptions = {
+          foo: { disabled: true },
+          bar: { field: 'bar', type: 'number' },
+        };
+        const test = qp.parseParams(params, options);
+        const expected = [{ field: 'bar', operator: 'eq', value: 123 }];
+        expect(test.paramsFilter).toMatchObject(expected);
+      });
+    });
+
+    describe('#setAuthFilter', () => {
+      it('it should set authFilter, 1', () => {
+        qp.setAuthFilter();
+        expect(qp.authFilter).toMatchObject({});
+      });
+      it('it should set authFilter, 2', () => {
+        const test = { foo: 'bar' };
+        qp.setAuthFilter(test);
+        const parsed = qp.getParsed();
+        expect(parsed.authFilter).toMatchObject(test);
+      });
+    });
+
+    describe('#setAuthPersist', () => {
+      it('it should set authPersist, 1', () => {
+        qp.setAuthPersist();
+        expect(qp.authPersist).toMatchObject({});
+      });
+      it('it should set authPersist, 2', () => {
+        const test = { foo: 'bar' };
+        qp.setAuthPersist(test);
+        const parsed = qp.getParsed();
+        expect(parsed.authPersist).toMatchObject(test);
       });
     });
 
@@ -431,6 +504,9 @@ describe('#request-query', () => {
         const expected: ParsedRequestParams = {
           fields: [],
           paramsFilter: [],
+          search: undefined,
+          authFilter: undefined,
+          authPersist: undefined,
           filter: [],
           or: [],
           join: [],

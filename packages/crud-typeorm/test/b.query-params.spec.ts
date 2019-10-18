@@ -3,6 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { RequestQueryBuilder } from '@nestjsx/crud-request';
+import 'jest-extended';
 import * as request from 'supertest';
 
 import { Company } from '../../../integration/crud-typeorm/companies';
@@ -11,7 +12,7 @@ import { Project } from '../../../integration/crud-typeorm/projects';
 import { User } from '../../../integration/crud-typeorm/users';
 import { UserProfile } from '../../../integration/crud-typeorm/users-profiles';
 import { HttpExceptionFilter } from '../../../integration/shared/https-exception.filter';
-import { Crud } from '../../crud/src/decorators/crud.decorator';
+import { Crud } from '../../crud/src/decorators';
 import { CompaniesService } from './__fixture__/companies.service';
 import { ProjectsService } from './__fixture__/projects.service';
 import { UsersService } from './__fixture__/users.service';
@@ -44,6 +45,11 @@ describe('#crud-typeorm', () => {
 
     @Crud({
       model: { type: Project },
+      routes: {
+        updateOneBase: {
+          returnShallow: true,
+        },
+      },
       query: {
         join: {
           company: {
@@ -51,6 +57,8 @@ describe('#crud-typeorm', () => {
             persist: ['id'],
             exclude: ['updatedAt', 'createdAt'],
           },
+          users: {},
+          userProjects: {},
         },
         sort: [{ field: 'id', order: 'ASC' }],
         limit: 100,
@@ -62,16 +70,63 @@ describe('#crud-typeorm', () => {
     }
 
     @Crud({
+      model: { type: Project },
+    })
+    @Controller('projects2')
+    class ProjectsController2 {
+      constructor(public service: ProjectsService) {}
+    }
+
+    @Crud({
+      model: { type: Project },
+      query: {
+        filter: [{ field: 'isActive', operator: 'eq', value: false }],
+      },
+    })
+    @Controller('projects3')
+    class ProjectsController3 {
+      constructor(public service: ProjectsService) {}
+    }
+
+    @Crud({
+      model: { type: Project },
+      query: {
+        filter: { isActive: true },
+      },
+    })
+    @Controller('projects4')
+    class ProjectsController4 {
+      constructor(public service: ProjectsService) {}
+    }
+
+    @Crud({
       model: { type: User },
       query: {
         join: {
           company: {},
           'company.projects': {},
+          userLicenses: {},
         },
       },
     })
     @Controller('users')
     class UsersController {
+      constructor(public service: UsersService) {}
+    }
+
+    @Crud({
+      model: { type: User },
+      query: {
+        join: {
+          company: {},
+          'company.projects': {
+            alias: 'pr',
+          },
+        },
+      },
+    })
+    @Controller('users2')
+    class UsersController2 {
       constructor(public service: UsersService) {}
     }
 
@@ -81,7 +136,15 @@ describe('#crud-typeorm', () => {
           TypeOrmModule.forRoot({ ...withCache, logging: false }),
           TypeOrmModule.forFeature([Company, Project, User, UserProfile]),
         ],
-        controllers: [CompaniesController, ProjectsController, UsersController],
+        controllers: [
+          CompaniesController,
+          ProjectsController,
+          ProjectsController2,
+          ProjectsController3,
+          ProjectsController4,
+          UsersController,
+          UsersController2,
+        ],
         providers: [
           { provide: APP_FILTER, useClass: HttpExceptionFilter },
           CompaniesService,
@@ -101,7 +164,7 @@ describe('#crud-typeorm', () => {
     });
 
     afterAll(async () => {
-      app.close();
+      await app.close();
     });
 
     describe('#select', () => {
@@ -111,7 +174,7 @@ describe('#crud-typeorm', () => {
           .get('/companies')
           .query(query)
           .end((_, res) => {
-            expect(res.status).toBe(400);
+            expect(res.status).toBe(500);
             done();
           });
       });
@@ -281,7 +344,7 @@ describe('#crud-typeorm', () => {
           .get('/users/1')
           .query(query)
           .end((_, res) => {
-            expect(res.status).toBe(400);
+            expect(res.status).toBe(500);
             done();
           });
       });
@@ -299,7 +362,7 @@ describe('#crud-typeorm', () => {
           .get('/users/1')
           .query(query)
           .end((_, res) => {
-            expect(res.status).toBe(400);
+            expect(res.status).toBe(500);
             done();
           });
       });
@@ -317,7 +380,7 @@ describe('#crud-typeorm', () => {
           .get('/users/1')
           .query(query)
           .end((_, res) => {
-            expect(res.status).toBe(400);
+            expect(res.status).toBe(500);
             done();
           });
       });
@@ -350,7 +413,6 @@ describe('#crud-typeorm', () => {
             done();
           });
       });
-
       it('should return joined entity, 2', (done) => {
         const query = qb
           .setFilter({ field: 'company.projects.id', operator: 'notnull' })
@@ -364,6 +426,55 @@ describe('#crud-typeorm', () => {
             expect(res.status).toBe(200);
             expect(res.body.company).toBeDefined();
             expect(res.body.company.projects).toBeDefined();
+            done();
+          });
+      });
+      it('should return joined entity with alias', (done) => {
+        const query = qb
+          .setFilter({ field: 'pr.id', operator: 'notnull' })
+          .setJoin({ field: 'company' })
+          .setJoin({ field: 'company.projects' })
+          .query();
+        return request(server)
+          .get('/users2/1')
+          .query(query)
+          .end((_, res) => {
+            expect(res.status).toBe(200);
+            expect(res.body.company).toBeDefined();
+            expect(res.body.company.projects).toBeDefined();
+            done();
+          });
+      });
+      it('should return joined entity with ManyToMany pivot table', (done) => {
+        const query = qb
+          .setJoin({ field: 'users' })
+          .setJoin({ field: 'userProjects' })
+          .query();
+        return request(server)
+          .get('/projects/1')
+          .query(query)
+          .end((_, res) => {
+            expect(res.status).toBe(200);
+            expect(res.body.users).toBeDefined();
+            expect(res.body.users.length).toBe(2);
+            expect(res.body.users[0].id).toBe(1);
+            expect(res.body.userProjects).toBeDefined();
+            expect(res.body.userProjects.length).toBe(2);
+            expect(res.body.userProjects[0].review).toBe('User project 1 1');
+            done();
+          });
+      });
+    });
+
+    describe('#query composite key join', () => {
+      it('should return joined relation', (done) => {
+        const query = qb.setJoin({ field: 'userLicenses' }).query();
+        return request(server)
+          .get('/users/1')
+          .query(query)
+          .end((_, res) => {
+            expect(res.status).toBe(200);
+            expect(res.body.userLicenses).toBeDefined();
             done();
           });
       });
@@ -428,6 +539,215 @@ describe('#crud-typeorm', () => {
         expect(res.body[0].company.projects[1].id).toBeLessThan(
           res.body[0].company.projects[0].id,
         );
+      });
+    });
+
+    describe('#search', () => {
+      const projects2 = () => request(server).get('/projects2');
+      const projects3 = () => request(server).get('/projects3');
+      const projects4 = () => request(server).get('/projects4');
+
+      it('should return with search, 1', async () => {
+        const query = qb.search({ id: 1 }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 2', async () => {
+        const query = qb.search({ id: 1, name: 'Project1' }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 3', async () => {
+        const query = qb.search({ id: 1, name: { $eq: 'Project1' } }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 4', async () => {
+        const query = qb.search({ name: { $eq: 'Project1' } }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 5', async () => {
+        const query = qb.search({ id: { $notnull: true, $eq: 1 } }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 6', async () => {
+        const query = qb.search({ id: { $or: { $isnull: true, $eq: 1 } } }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 7', async () => {
+        const query = qb.search({ id: { $or: { $eq: 1 } } }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 8', async () => {
+        const query = qb
+          .search({ id: { $notnull: true, $or: { $eq: 1, $in: [30, 31] } } })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 9', async () => {
+        const query = qb.search({ id: { $notnull: true, $or: { $eq: 1 } } }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(1);
+      });
+      it('should return with search, 10', async () => {
+        const query = qb.search({ id: null }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(0);
+      });
+      it('should return with search, 11', async () => {
+        const query = qb
+          .search({ $and: [{ id: { $notin: [5, 6, 7, 8, 9, 10] } }, { isActive: true }] })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(4);
+      });
+      it('should return with search, 12', async () => {
+        const query = qb
+          .search({ $and: [{ id: { $notin: [5, 6, 7, 8, 9, 10] } }] })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(14);
+      });
+      it('should return with search, 13', async () => {
+        const query = qb.search({ $or: [{ id: 54 }] }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(0);
+      });
+      it('should return with search, 14', async () => {
+        const query = qb
+          .search({ $or: [{ id: 54 }, { id: 33 }, { id: { $in: [1, 2] } }] })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(2);
+        expect(res.body[0].id).toBe(1);
+        expect(res.body[1].id).toBe(2);
+      });
+      it('should return with search, 15', async () => {
+        const query = qb.search({ $or: [{ id: 54 }], name: 'Project1' }).query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(0);
+      });
+      it('should return with search, 16', async () => {
+        const query = qb
+          .search({ $or: [{ isActive: false }, { id: 3 }], name: 'Project3' })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(3);
+      });
+      it('should return with search, 17', async () => {
+        const query = qb
+          .search({ $or: [{ isActive: false }, { id: { $eq: 3 } }], name: 'Project3' })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(3);
+      });
+      it('should return with search, 17', async () => {
+        const query = qb
+          .search({
+            $or: [{ isActive: false }, { id: { $eq: 3 } }],
+            name: { $eq: 'Project3' },
+          })
+          .query();
+        const res = await projects2()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(3);
+      });
+      it('should return with default filter, 1', async () => {
+        const query = qb.search({ name: 'Project11' }).query();
+        const res = await projects3()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(11);
+      });
+      it('should return with default filter, 2', async () => {
+        const query = qb.search({ name: 'Project1' }).query();
+        const res = await projects3()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(0);
+      });
+      it('should return with default filter, 3', async () => {
+        const query = qb.search({ name: 'Project2' }).query();
+        const res = await projects4()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(1);
+        expect(res.body[0].id).toBe(2);
+      });
+      it('should return with default filter, 4', async () => {
+        const query = qb.search({ name: 'Project11' }).query();
+        const res = await projects4()
+          .query(query)
+          .expect(200);
+        expect(res.body).toBeArrayOfSize(0);
+      });
+    });
+
+    describe('#update', () => {
+      it('should update company id of project', async () => {
+        await request(server)
+          .patch('/projects/18')
+          .send({ companyId: 10 })
+          .expect(200);
+
+        const modified = await request(server)
+          .get('/projects/18')
+          .expect(200);
+
+        expect(modified.body.companyId).toBe(10);
       });
     });
   });

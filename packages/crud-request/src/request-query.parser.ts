@@ -8,6 +8,8 @@ import {
   isObject,
   isStringFull,
   objKeys,
+  isNil,
+  ObjectLiteral,
 } from '@nestjsx/util';
 
 import { RequestQueryException } from './exceptions';
@@ -31,12 +33,17 @@ import {
   QueryFilter,
   QueryJoin,
   QuerySort,
+  SCondition,
 } from './types';
 
 // tslint:disable:variable-name ban-types
 export class RequestQueryParser implements ParsedRequestParams {
   public fields: QueryFields = [];
   public paramsFilter: QueryFilter[] = [];
+  public authFilter: ObjectLiteral = undefined;
+  public authPersist: ObjectLiteral = undefined;
+  public search: SCondition;
+  public searchJson: SCondition;
   public filter: QueryFilter[] = [];
   public or: QueryFilter[] = [];
   public join: QueryJoin[] = [];
@@ -63,6 +70,9 @@ export class RequestQueryParser implements ParsedRequestParams {
     return {
       fields: this.fields,
       paramsFilter: this.paramsFilter,
+      authFilter: this.authFilter,
+      authPersist: this.authPersist,
+      search: this.search,
       filter: this.filter,
       or: this.or,
       join: this.join,
@@ -81,14 +91,18 @@ export class RequestQueryParser implements ParsedRequestParams {
       if (hasLength(paramNames)) {
         this._query = query;
         this._paramNames = paramNames;
+        let searchData = this._query[this.getParamNames('search')[0]];
 
+        this.search = this.parseSearchQueryParam(searchData) as any;
+        if (isNil(this.search)) {
+          this.filter = this.parseQueryParam(
+            'filter',
+            this.conditionParser.bind(this, 'filter'),
+          );
+          this.or = this.parseQueryParam('or', this.conditionParser.bind(this, 'or'));
+        }
         this.fields =
           this.parseQueryParam('fields', this.fieldsParser.bind(this))[0] || [];
-        this.filter = this.parseQueryParam(
-          'filter',
-          this.conditionParser.bind(this, 'filter'),
-        );
-        this.or = this.parseQueryParam('or', this.conditionParser.bind(this, 'or'));
         this.join = this.parseQueryParam('join', this.joinParser.bind(this));
         this.sort = this.parseQueryParam('sort', this.sortParser.bind(this));
         this.limit = this.parseQueryParam(
@@ -120,11 +134,21 @@ export class RequestQueryParser implements ParsedRequestParams {
       if (hasLength(paramNames)) {
         this._params = params;
         this._paramsOptions = options;
-        this.paramsFilter = paramNames.map((name) => this.paramParser(name));
+        this.paramsFilter = paramNames
+          .map((name) => this.paramParser(name))
+          .filter((filter) => filter);
       }
     }
 
     return this;
+  }
+
+  setAuthFilter(filter: ObjectLiteral = {}) {
+    this.authFilter = filter;
+  }
+
+  setAuthPersist(persist: ObjectLiteral = {}) {
+    this.authPersist = persist;
   }
 
   private getParamNames(
@@ -171,6 +195,12 @@ export class RequestQueryParser implements ParsedRequestParams {
       if (!isDate(parsed) && isObject(parsed)) {
         // throw new Error('Don\'t support object now');
         return val;
+      } else if (
+        typeof parsed === 'number' &&
+        parsed.toLocaleString('fullwide', { useGrouping: false }) !== val
+      ) {
+        // JS cannot handle big numbers. Leave it as a string to prevent data loss
+        return val;
       }
 
       return parsed;
@@ -195,7 +225,25 @@ export class RequestQueryParser implements ParsedRequestParams {
     return data.split(this._options.delimStr);
   }
 
-  private conditionParser(cond: 'filter' | 'or', data: string): QueryFilter {
+  private parseSearchQueryParam(d: any): SCondition {
+    try {
+      if (isNil(d)) {
+        return undefined;
+      }
+
+      const data = JSON.parse(d);
+
+      if (!isObject(data)) {
+        throw new Error();
+      }
+
+      return data;
+    } catch (_) {
+      throw new RequestQueryException('Invalid search param. JSON expected');
+    }
+  }
+
+  private conditionParser(cond: 'filter' | 'or' | 'search', data: string): QueryFilter {
     const isArrayValue = ['in', 'notin', 'between'];
     const isEmptyValue = ['isnull', 'notnull'];
     const param = data.split(this._options.delim);
@@ -254,10 +302,16 @@ export class RequestQueryParser implements ParsedRequestParams {
   private paramParser(name: string): QueryFilter {
     validateParamOption(this._paramsOptions, name);
     const option = this._paramsOptions[name];
-    const value = this.parseValue(this._params[name]);
+
+    if (option.disabled) {
+      return undefined;
+    }
+
+    let value = this._params[name];
 
     switch (option.type) {
       case 'number':
+        value = this.parseValue(value);
         validateNumeric(value, `param ${name}`);
         break;
       case 'uuid':

@@ -46,9 +46,14 @@ export function validateFields(fields: QueryFields): void {
   }
 }
 
-export function validateCondition(val: QueryFilter, cond: 'filter' | 'or'): void {
+export function validateCondition(
+  val: QueryFilter,
+  cond: 'filter' | 'or' | 'search',
+): void {
   if (!isObject(val) || !isStringFull(val.field)) {
-    throw new RequestQueryException(`Invalid ${cond} field. String expected`);
+    throw new RequestQueryException(
+      `Invalid field type in ${cond} condition. String expected`,
+    );
   }
   validateComparisonOperator(val.operator);
 }
@@ -96,6 +101,9 @@ export function validateParamOption(options: ParamsOptions, name: string) {
     throw new RequestQueryException(`Invalid param ${name}. Invalid crud options`);
   }
   const option = options[name];
+  if (option && option.disabled) {
+    return;
+  }
   if (!isObject(option) || isNil(option.field) || isNil(option.type)) {
     throw new RequestQueryException(`Invalid param option in Crud`);
   }
